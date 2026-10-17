@@ -1,0 +1,69 @@
+From 791fb55c5e7c07ae33e483d53365d151bbc32e53 Mon Sep 17 00:00:00 2001
+From: Lana <lana@local>
+Date: Sat, 17 Oct 2026 20:09:53 +1100
+Subject: [PATCH] desktop: Linux compositor glass (Hyprland + True Glass)
+
+---
+ apps/desktop/electron/main.ts | 31 ++++++++++++++++++++++++++-----
+ 1 file changed, 26 insertions(+), 5 deletions(-)
+
+diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
+index 5987d629f2d..f372a9dd742 100644
+--- a/apps/desktop/electron/main.ts
++++ b/apps/desktop/electron/main.ts
+@@ -742,10 +742,24 @@ const IS_WSL = isWslEnvironment()
+ const DARWIN_MAJOR = IS_MAC ? Number.parseInt(os.release(), 10) || 0 : 0
+ // Glass: macOS vibrancy, or Windows 11 22H2+ system backdrop. Computed once
+ // so the renderer, the persisted default, and every chat window agree.
+-const GLASS_SUPPORTED = glassSupportedOn(process.platform, os.release())
++// Linux compositor glass (local patch): Linux has no Electron window material,
++// but a compositor that blurs/refracts behind transparent pixels (Hyprland with
++// True Glass / hyprglass, KWin blur, ...) can play that role. When enabled, chat
++// windows are created `transparent: true` and the renderer's existing glass
++// mode clears the field surfaces while text stays fully opaque.
++// Auto-on under Hyprland; HERMES_DESKTOP_LINUX_GLASS=1 forces on, =0 forces off.
++const LINUX_GLASS_ENV = process.env.HERMES_DESKTOP_LINUX_GLASS
++
++const LINUX_COMPOSITOR_GLASS =
++  process.platform === 'linux' &&
++  !IS_WSL &&
++  LINUX_GLASS_ENV !== '0' &&
++  (LINUX_GLASS_ENV === '1' || Boolean(process.env.HYPRLAND_INSTANCE_SIGNATURE))
++
++const GLASS_SUPPORTED = glassSupportedOn(process.platform, os.release()) || LINUX_COMPOSITOR_GLASS
+ // Clear rides setOpacity, a documented no-op on Linux, so neither mode works
+-// there and Settings drops the row entirely.
+-const TRANSLUCENCY_SUPPORTED = translucencySupportedOn(process.platform)
++// there and Settings drops the row entirely (unless compositor glass is on).
++const TRANSLUCENCY_SUPPORTED = translucencySupportedOn(process.platform) || LINUX_COMPOSITOR_GLASS
+ const APP_ROOT = app.getAppPath()
+ 
+ // Device-local preference: block F12 from opening DevTools.
+@@ -1584,7 +1598,9 @@ function applyWindowTranslucency(win, changed = { backing: true, material: true,
+     // translucencyBackedWindows above).
+     if (translucencyBackedWindows.has(win)) {
+       if (changed.backing && typeof win.setBackgroundColor === 'function') {
+-        win.setBackgroundColor(glassActive(translucencyState) ? '#00000000' : getWindowBackgroundColor())
++        win.setBackgroundColor(
++          LINUX_COMPOSITOR_GLASS || glassActive(translucencyState) ? '#00000000' : getWindowBackgroundColor()
++        )
+       }
+ 
+       if (changed.material) {
+@@ -1648,7 +1664,12 @@ function chatWindowSurfaceOptions() {
+     // Every chat window is resizable.
+     ...windowBackgroundMaterialOptions(translucencyState, IS_WINDOWS, GLASS_SUPPORTED),
+     ...windowOpacityOptions(translucencyState),
+-    ...windowBackingOptions(translucencyState, getWindowBackgroundColor())
++    ...windowBackingOptions(translucencyState, getWindowBackgroundColor()),
++    // Linux compositor glass: the window must be BORN transparent (Electron
++    // cannot add per-pixel alpha later). Always transparent when the feature is
++    // available, so toggling glass in Settings needs no restart; with glass off
++    // the page paints its own opaque background.
++    ...(LINUX_COMPOSITOR_GLASS ? { transparent: true, backgroundColor: '#00000000' } : {})
+   }
+ }
+ 
+-- 
+2.55.0
+
